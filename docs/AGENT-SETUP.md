@@ -273,7 +273,13 @@ Add to your `.cursor/mcp.json` (same path on all platforms — it's project-rela
 
 > **Windows**: Make sure `engram.exe` is in your `PATH`. Cursor resolves MCP commands from the system PATH.
 
-> **Memory Protocol:** Add the Memory Protocol instructions to your `.cursorrules` file. See [DOCS.md](../DOCS.md#memory-protocol-full-text) for the full text, or use the minimal version from [Surviving Compaction](#surviving-compaction-recommended).
+> **Memory Protocol:** Cursor uses `.mdc` rule files stored in `.cursor/rules/` (Cursor 0.43+). Create an `engram.mdc` file (any name works — the `.mdc` extension is what matters) and place it in one of:
+> - **Project-specific:** `.cursor/rules/engram.mdc` — commit to git so your whole team gets it
+> - **Global (all projects):** `~/.cursor/rules/engram.mdc` (Windows: `%USERPROFILE%\.cursor\rules\engram.mdc`) — create the directory if it doesn't exist
+>
+> See [DOCS.md](../DOCS.md#memory-protocol-full-text) for the full text, or use the minimal version from [Surviving Compaction](#surviving-compaction-recommended).
+>
+> **Note:** The legacy `.cursorrules` file at the project root is still recognized by Cursor but is deprecated. Prefer `.cursor/rules/` for all new setups.
 
 ---
 
@@ -344,7 +350,20 @@ You have access to Engram persistent memory via MCP tools (mem_save, mem_search,
 - After any compaction or context reset, call `mem_context` to recover session state before continuing.
 ```
 
-**For Cursor/Windsurf** (`.cursorrules` or `.windsurfrules`):
+**For Cursor** (`.cursor/rules/engram.mdc` or `~/.cursor/rules/engram.mdc`):
+
+The `alwaysApply: true` frontmatter tells Cursor to load this rule in every conversation, regardless of which files are open.
+
+```text
+---
+alwaysApply: true
+---
+
+You have access to Engram persistent memory (mem_save, mem_search, mem_context).
+Save proactively after significant work. After context resets, call mem_context to recover state.
+```
+
+**For Windsurf** (`.windsurfrules`):
 ```
 You have access to Engram persistent memory (mem_save, mem_search, mem_context).
 Save proactively after significant work. After context resets, call mem_context to recover state.
