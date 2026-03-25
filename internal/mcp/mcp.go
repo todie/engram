@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Gentleman-Programming/engram/internal/store"
@@ -1039,11 +1040,19 @@ func defaultSessionID(project string) string {
 }
 
 func intArg(req mcp.CallToolRequest, key string, defaultVal int) int {
-	v, ok := req.GetArguments()[key].(float64)
-	if !ok {
+	v := req.GetArguments()[key]
+	switch val := v.(type) {
+	case float64:
+		return int(val)
+	case string:
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return defaultVal
+		}
+		return n
+	default:
 		return defaultVal
 	}
-	return int(v)
 }
 
 func boolArg(req mcp.CallToolRequest, key string, defaultVal bool) bool {
