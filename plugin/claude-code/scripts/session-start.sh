@@ -4,10 +4,21 @@
 # 1. Ensures the engram server is running
 # 2. Creates a session in engram
 # 3. Auto-imports git-synced chunks if .engram/manifest.json exists
-# 4. Injects Memory Protocol instructions + memory context
+# 4. Injects a minimal tool-availability pointer + compacted memory context
+#
+# Memory protocol (when/what to save, search, close) lives in the
+# `engram:memory` skill shipped with this plugin and is loaded on demand.
+# Re-injecting the full protocol on every SessionStart wastes ~1.8 KB of
+# context window per session, so this script only emits a short pointer.
 
 ENGRAM_PORT="${ENGRAM_PORT:-7437}"
 ENGRAM_URL="http://127.0.0.1:${ENGRAM_PORT}"
+
+# Tunables (override via env)
+#   ENGRAM_CONTEXT_LIMIT   — max observations to inject (default 8)
+#   ENGRAM_CONTEXT_MAXLEN  — max chars per observation line (default 140)
+CTX_LIMIT="${ENGRAM_CONTEXT_LIMIT:-8}"
+CTX_MAXLEN="${ENGRAM_CONTEXT_MAXLEN:-140}"
 
 # Load shared helpers
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -55,46 +66,50 @@ fi
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
 CONTEXT=$(curl -sf "${ENGRAM_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
 
-# Inject Memory Protocol + context — stdout goes to Claude as additionalContext
+# Compact the "### Recent Observations" section: keep at most $CTX_LIMIT
+# observations, each flattened onto a single line and truncated to
+# $CTX_MAXLEN chars. The server inlines up to 300 chars of raw content per
+# bullet (often multi-line, since session summaries are markdown documents),
+# so a raw /context response for a busy project is ~8 KB. This awk pass
+# concatenates each bullet's continuation lines, collapses whitespace, and
+# caps both the count and per-bullet length — typical injected context drops
+# to ~1.5 KB. Headers, recent sessions, and recent prompts pass through.
+if [ -n "$CONTEXT" ]; then
+  CONTEXT=$(printf '%s\n' "$CONTEXT" | awk -v lim="$CTX_LIMIT" -v max="$CTX_MAXLEN" '
+    function flush() {
+      if (buf == "") return
+      if (kept < lim) {
+        gsub(/[[:space:]]+/, " ", buf)
+        if (length(buf) > max) buf = substr(buf, 1, max - 1) "…"
+        print buf
+        kept++
+      }
+      buf = ""
+    }
+    /^### Recent Observations/ { flush(); in_obs = 1; print; next }
+    /^### / { flush(); in_obs = 0; print; next }
+    in_obs && /^- \[/ { flush(); buf = $0; next }
+    in_obs { if (buf != "") buf = buf " " $0; next }
+    { print }
+    END { flush() }
+  ')
+fi
+
+# Inject minimal protocol pointer + compacted context as additionalContext.
 cat <<'PROTOCOL'
-## Engram Persistent Memory — ACTIVE PROTOCOL
+## Engram Memory — active
 
-You have engram memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
+Core tools (always available): mem_save, mem_search, mem_context,
+mem_session_summary, mem_get_observation, mem_suggest_topic_key, mem_update,
+mem_session_start, mem_session_end, mem_save_prompt.
+Admin tools via ToolSearch: mem_stats, mem_delete, mem_timeline, mem_capture_passive.
 
-### CORE TOOLS — always available, no ToolSearch needed
-mem_save, mem_search, mem_context, mem_session_summary, mem_get_observation, mem_save_prompt
-
-Use ToolSearch for other tools: mem_update, mem_suggest_topic_key, mem_session_start, mem_session_end, mem_stats, mem_delete, mem_timeline, mem_capture_passive
-
-### PROACTIVE SAVE — do NOT wait for user to ask
-Call `mem_save` IMMEDIATELY after ANY of these:
-- Decision made (architecture, convention, workflow, tool choice)
-- Bug fixed (include root cause)
-- Convention or workflow documented/updated
-- Notion/Jira/GitHub artifact created or updated with significant content
-- Non-obvious discovery, gotcha, or edge case found
-- Pattern established (naming, structure, approach)
-- User preference or constraint learned
-- Feature implemented with non-obvious approach
-- User confirms your recommendation ("dale", "go with that", "sounds good", "sí, esa")
-- User rejects an approach or expresses a preference ("no, better X", "I prefer X", "siempre hacé X")
-- Discussion concludes with a clear direction chosen
-
-**Self-check after EVERY task**: "Did I or the user just make a decision, confirm a recommendation, express a preference, fix a bug, learn something, or establish a convention? If yes → mem_save NOW."
-
-### SEARCH MEMORY when:
-- User asks to recall anything ("remember", "what did we do", "acordate", "qué hicimos")
-- Starting work on something that might have been done before
-- User mentions a topic you have no context on
-- User's FIRST message references the project, a feature, or a problem — call `mem_search` with keywords from their message to check for prior work before responding
-
-### SESSION CLOSE — before saying "done"/"listo":
-Call `mem_session_summary` with: Goal, Discoveries, Accomplished, Next Steps, Relevant Files.
+Full protocol (when/what to save, search rules, session close) lives in the
+`engram:memory` skill — load it on demand when you need the rules.
 PROTOCOL
 
-# Inject memory context if available
 if [ -n "$CONTEXT" ]; then
-  printf "\n%s\n" "$CONTEXT"
+  printf '\n%s\n' "$CONTEXT"
 fi
 
 exit 0
