@@ -382,6 +382,26 @@ func TestCoreReadHandlersAndHelpersE2E(t *testing.T) {
 		t.Fatalf("expected formatted context output")
 	}
 
+	// ── limit + compact query params (added in feat/context-limit-compact).
+	// compact=1 drops the ": <content>" preview from observation bullets,
+	// and limit=1 caps the observations section. The resulting payload must
+	// be strictly smaller than the default.
+	compactResp, err := client.Get(ts.URL + "/context?project=engram&scope=project&limit=1&compact=1")
+	if err != nil {
+		t.Fatalf("context compact: %v", err)
+	}
+	if compactResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 context compact, got %d", compactResp.StatusCode)
+	}
+	compactData := decodeJSON[map[string]string](t, compactResp)
+	if len(compactData["context"]) >= len(contextData["context"]) {
+		t.Fatalf("compact context (%d) should be smaller than default (%d)",
+			len(compactData["context"]), len(contextData["context"]))
+	}
+	if strings.Contains(compactData["context"], "- [") && strings.Contains(compactData["context"], "**: ") {
+		t.Fatalf("compact context should not include ': <body>' content preview, got:\n%s", compactData["context"])
+	}
+
 	statsResp, err := client.Get(ts.URL + "/stats")
 	if err != nil {
 		t.Fatalf("stats: %v", err)

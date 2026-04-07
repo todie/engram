@@ -1610,13 +1610,46 @@ func (s *Store) Stats() (*Stats, error) {
 
 // ─── Context Formatting ─────────────────────────────────────────────────────
 
+// ContextOptions tunes the output of FormatContextWithOptions.
+//
+// A zero-value ContextOptions (Limit==0, Compact==false) reproduces the
+// legacy FormatContext behaviour exactly, so it is safe to pass through
+// from handlers that do not care about the new knobs.
+type ContextOptions struct {
+	// Limit caps the number of observations rendered into the context
+	// string. Zero means "use the store-wide MaxContextResults default".
+	// Sessions and prompts are not affected — their counts are fixed at
+	// 5 and 10 respectively, matching the legacy behaviour.
+	Limit int
+
+	// Compact drops the inline content preview on each observation bullet,
+	// rendering `- [type] **title**` instead of `- [type] **title**: <300
+	// chars of body>`. On a busy project this cuts the observation section
+	// by ~80%. Sessions and prompts are not affected.
+	Compact bool
+}
+
+// FormatContext is a thin wrapper around FormatContextWithOptions that uses
+// default options, preserving the pre-ContextOptions call signature so
+// existing callers and tests keep working unchanged.
 func (s *Store) FormatContext(project, scope string) (string, error) {
+	return s.FormatContextWithOptions(project, scope, ContextOptions{})
+}
+
+// FormatContextWithOptions renders the "## Memory from Previous Sessions"
+// markdown block for the given project/scope, honoring the supplied
+// ContextOptions for observation limit and compact rendering.
+func (s *Store) FormatContextWithOptions(project, scope string, opts ContextOptions) (string, error) {
 	sessions, err := s.RecentSessions(project, 5)
 	if err != nil {
 		return "", err
 	}
 
-	observations, err := s.RecentObservations(project, scope, s.cfg.MaxContextResults)
+	obsLimit := opts.Limit
+	if obsLimit <= 0 {
+		obsLimit = s.cfg.MaxContextResults
+	}
+	observations, err := s.RecentObservations(project, scope, obsLimit)
 	if err != nil {
 		return "", err
 	}
@@ -1657,8 +1690,12 @@ func (s *Store) FormatContext(project, scope string) (string, error) {
 	if len(observations) > 0 {
 		b.WriteString("### Recent Observations\n")
 		for _, obs := range observations {
-			fmt.Fprintf(&b, "- [%s] **%s**: %s\n",
-				obs.Type, obs.Title, truncate(obs.Content, 300))
+			if opts.Compact {
+				fmt.Fprintf(&b, "- [%s] **%s**\n", obs.Type, obs.Title)
+			} else {
+				fmt.Fprintf(&b, "- [%s] **%s**: %s\n",
+					obs.Type, obs.Title, truncate(obs.Content, 300))
+			}
 		}
 		b.WriteString("\n")
 	}
