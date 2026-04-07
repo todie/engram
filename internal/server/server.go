@@ -482,7 +482,10 @@ func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if raw := q.Get("compact"); raw != "" {
-		// Accept "1", "true", "yes" (case-insensitive); anything else is false.
+		// Accepts any value strconv.ParseBool understands: "1", "t", "T",
+		// "TRUE", "true", "True" (and their false counterparts). Unknown
+		// values (e.g. "yes") silently leave Compact at its zero value so
+		// callers that expected full content don't get surprised.
 		if b, err := strconv.ParseBool(raw); err == nil {
 			opts.Compact = b
 		}
