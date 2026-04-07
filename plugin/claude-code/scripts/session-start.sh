@@ -62,18 +62,23 @@ if [ -f "${CWD}/.engram/manifest.json" ]; then
   engram sync --import 2>/dev/null
 fi
 
-# Fetch memory context
+# Fetch memory context with server-side limit + compact rendering.
+#
+# The /context endpoint honors `limit` (max observations) and `compact=1`
+# (drop inline content preview) as of the feat/context-limit-compact change.
+# Older engram binaries silently ignore the query params and return the
+# full context, which this script then post-processes with awk as a
+# belt-and-suspenders fallback — so the hook works against both old and
+# new servers.
 ENCODED_PROJECT=$(printf '%s' "$PROJECT" | jq -sRr @uri)
-CONTEXT=$(curl -sf "${ENGRAM_URL}/context?project=${ENCODED_PROJECT}" --max-time 3 2>/dev/null | jq -r '.context // empty')
+CONTEXT=$(curl -sf "${ENGRAM_URL}/context?project=${ENCODED_PROJECT}&limit=${CTX_LIMIT}&compact=1" --max-time 3 2>/dev/null | jq -r '.context // empty')
 
-# Compact the "### Recent Observations" section: keep at most $CTX_LIMIT
-# observations, each flattened onto a single line and truncated to
-# $CTX_MAXLEN chars. The server inlines up to 300 chars of raw content per
-# bullet (often multi-line, since session summaries are markdown documents),
-# so a raw /context response for a busy project is ~8 KB. This awk pass
-# concatenates each bullet's continuation lines, collapses whitespace, and
-# caps both the count and per-bullet length — typical injected context drops
-# to ~1.5 KB. Headers, recent sessions, and recent prompts pass through.
+# Fallback post-processing for older servers that don't honor compact=1.
+# On a new server the observation section is already single-line-per-bullet
+# with no content preview, so this awk pass is a near no-op; on an old
+# server it concatenates each bullet's continuation lines, collapses
+# whitespace, caps per-bullet length at $CTX_MAXLEN, and enforces the same
+# $CTX_LIMIT as a safety net.
 if [ -n "$CONTEXT" ]; then
   CONTEXT=$(printf '%s\n' "$CONTEXT" | awk -v lim="$CTX_LIMIT" -v max="$CTX_MAXLEN" '
     function flush() {

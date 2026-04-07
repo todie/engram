@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -4437,5 +4438,100 @@ func TestCountObservationsForProject(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected 0 for beta, got %d", count)
+	}
+}
+
+func TestFormatContextWithOptions(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateSession("ctx-sess", "engram", "/tmp/engram"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Seed 6 observations with multi-line bodies so Compact has something
+	// meaningful to drop. Titles are unique per observation so we can assert
+	// exactly which ones survive the Limit filter.
+	for i := 0; i < 6; i++ {
+		_, err := s.AddObservation(AddObservationParams{
+			SessionID: "ctx-sess",
+			Type:      "decision",
+			Title:     fmt.Sprintf("obs-%d", i),
+			Content:   fmt.Sprintf("## Goal\nLine one for obs %d\n\n## Details\nThis is a long body that should be dropped in Compact mode and capped in default mode. Lorem ipsum dolor sit amet consectetur.", i),
+			Project:   "engram",
+			Scope:     "project",
+		})
+		if err != nil {
+			t.Fatalf("add obs %d: %v", i, err)
+		}
+	}
+
+	// ── Default options ─ backward compat: should behave exactly like
+	// FormatContext and include the full (truncated) content preview.
+	defaultCtx, err := s.FormatContextWithOptions("engram", "project", ContextOptions{})
+	if err != nil {
+		t.Fatalf("format context default: %v", err)
+	}
+	legacyCtx, err := s.FormatContext("engram", "project")
+	if err != nil {
+		t.Fatalf("format context legacy: %v", err)
+	}
+	if defaultCtx != legacyCtx {
+		t.Fatalf("default ContextOptions should match legacy FormatContext output.\ndefault:\n%s\nlegacy:\n%s", defaultCtx, legacyCtx)
+	}
+	if !strings.Contains(defaultCtx, "Lorem ipsum") {
+		t.Fatalf("default mode should include content preview, got:\n%s", defaultCtx)
+	}
+
+	// ── Compact ─ content preview dropped.
+	compactCtx, err := s.FormatContextWithOptions("engram", "project", ContextOptions{Compact: true})
+	if err != nil {
+		t.Fatalf("format context compact: %v", err)
+	}
+	if strings.Contains(compactCtx, "Lorem ipsum") {
+		t.Fatalf("compact mode should drop content preview, got:\n%s", compactCtx)
+	}
+	if !strings.Contains(compactCtx, "**obs-5**") {
+		t.Fatalf("compact mode should still include observation titles, got:\n%s", compactCtx)
+	}
+	// Compact bullet format: `- [type] **title**` (no trailing `: ...`).
+	if !strings.Contains(compactCtx, "- [decision] **obs-5**\n") {
+		t.Fatalf("compact bullet format mismatch, got:\n%s", compactCtx)
+	}
+	// Compact output must be strictly smaller than default output on this
+	// workload (6 multi-line observations).
+	if len(compactCtx) >= len(defaultCtx) {
+		t.Fatalf("compact (%d) should be smaller than default (%d)", len(compactCtx), len(defaultCtx))
+	}
+
+	// ── Limit ─ caps observation count. Ask for 2; expect exactly 2 of
+	// the 6 inserted observations in the output.
+	limitedCtx, err := s.FormatContextWithOptions("engram", "project", ContextOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("format context limited: %v", err)
+	}
+	gotObs := strings.Count(limitedCtx, "- [decision] **obs-")
+	if gotObs != 2 {
+		t.Fatalf("expected 2 observations under Limit=2, got %d\n%s", gotObs, limitedCtx)
+	}
+
+	// ── Limit + Compact combined ─ both knobs apply independently.
+	combinedCtx, err := s.FormatContextWithOptions("engram", "project", ContextOptions{Limit: 3, Compact: true})
+	if err != nil {
+		t.Fatalf("format context combined: %v", err)
+	}
+	if strings.Count(combinedCtx, "- [decision] **obs-") != 3 {
+		t.Fatalf("expected 3 observations under Limit=3+Compact, got:\n%s", combinedCtx)
+	}
+	if strings.Contains(combinedCtx, "Lorem ipsum") {
+		t.Fatalf("Limit+Compact should still drop content, got:\n%s", combinedCtx)
+	}
+
+	// ── Limit <= 0 falls back to the store default.
+	zeroLimitCtx, err := s.FormatContextWithOptions("engram", "project", ContextOptions{Limit: 0})
+	if err != nil {
+		t.Fatalf("format context zero limit: %v", err)
+	}
+	if zeroLimitCtx != defaultCtx {
+		t.Fatalf("Limit=0 should equal default output")
 	}
 }

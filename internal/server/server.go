@@ -471,10 +471,24 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	scope := r.URL.Query().Get("scope")
+	q := r.URL.Query()
+	project := q.Get("project")
+	scope := q.Get("scope")
 
-	context, err := s.store.FormatContext(project, scope)
+	opts := store.ContextOptions{}
+	if raw := q.Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			opts.Limit = n
+		}
+	}
+	if raw := q.Get("compact"); raw != "" {
+		// Accept "1", "true", "yes" (case-insensitive); anything else is false.
+		if b, err := strconv.ParseBool(raw); err == nil {
+			opts.Compact = b
+		}
+	}
+
+	context, err := s.store.FormatContextWithOptions(project, scope, opts)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
